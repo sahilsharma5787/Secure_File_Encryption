@@ -45,12 +45,48 @@ export default function DecryptPanel({ onSubmit, initialFileId }: DecryptPanelPr
     },
   });
 
-  // If we have fileInfo from a direct link, update the form
+  // Fetch the actual file from the server when initialFileId is provided
   useEffect(() => {
-    if (fileInfo && fileInfo.file) {
-      form.setValue('file', fileInfo.file);
+    if (initialFileId && !fileInfoLoading && fileInfo) {
+      const fetchEncryptedFile = async () => {
+        try {
+          const response = await fetch(`/api/files/${initialFileId}/download`);
+          
+          if (!response.ok) {
+            toast({
+              title: "Error",
+              description: "Could not download the encrypted file",
+              variant: "destructive"
+            });
+            return;
+          }
+          
+          const blob = await response.blob();
+          const filename = fileInfo.encryptedFileName || "encrypted-file.bin";
+          
+          // Create a File object from the downloaded blob
+          const file = new File([blob], filename, { type: 'application/octet-stream' });
+          
+          // Set the file in the form
+          form.setValue('file', file);
+          
+          toast({
+            title: "File Ready",
+            description: "Enter your password to decrypt the file",
+          });
+        } catch (error) {
+          console.error("Error fetching file:", error);
+          toast({
+            title: "Error",
+            description: "Could not download the encrypted file",
+            variant: "destructive"
+          });
+        }
+      };
+      
+      fetchEncryptedFile();
     }
-  }, [fileInfo, form]);
+  }, [fileInfo, fileInfoLoading, initialFileId, form, toast]);
 
   const onFormSubmit = (data: FormValues) => {
     onSubmit({
