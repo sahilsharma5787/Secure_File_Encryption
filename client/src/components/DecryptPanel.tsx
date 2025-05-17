@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import FileDropzone from "@/components/FileDropzone";
 import type { FileData } from "@/pages/Home";
+import { apiRequest } from "@/lib/queryClient";
 
 interface DecryptPanelProps {
   onSubmit: (data: FileData) => void;

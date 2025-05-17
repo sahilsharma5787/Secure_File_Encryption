@@ -10,6 +10,12 @@ import SecurityInfo from "@/components/SecurityInfo";
 import { useTabs } from "@/hooks/use-tabs";
 import { Shield, LockOpen } from "lucide-react";
 import { useParams } from "wouter";
+import { 
+  encryptFile, 
+  decryptFile, 
+  prepareEncryptedFile, 
+  createDownloadLink 
+} from "@/lib/encryption";
 
 // Types for file data
 export type FileData = {
@@ -73,22 +79,95 @@ export default function Home() {
     message: "Please wait while we process your file..."
   });
 
-  const handleEncryptSubmit = (data: FileData) => {
+  const handleEncryptSubmit = async (data: FileData) => {
     setEncryptFileData(data);
     setProcessingText({
       title: "Encrypting Your File",
       message: "Please wait while we securely encrypt your file..."
     });
     setActivePanel("processing");
+    
+    try {
+      // Client-side encryption
+      const { encryptedData, salt, iv, originalFileName, originalSize } = 
+        await encryptFile(data.file, data.password);
+      
+      // Prepare the encrypted blob
+      const encryptedBlob = prepareEncryptedFile(
+        encryptedData,
+        salt,
+        iv,
+        originalFileName
+      );
+      
+      // Create a File object from the blob
+      const encryptedFile = new File(
+        [encryptedBlob], 
+        originalFileName + '.encrypted',
+        { type: 'application/octet-stream' }
+      );
+      
+      // Upload the encrypted file to the server
+      const formData = new FormData();
+      formData.append('file', encryptedFile);
+      
+      const response = await fetch('/api/encrypt', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to upload encrypted file');
+      }
+      
+      const result = await response.json();
+      handleEncryptSuccess(result);
+    } catch (error) {
+      console.error('Encryption error:', error);
+      handleError({
+        title: "Encryption Failed",
+        message: "We couldn't encrypt your file.",
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
   };
 
-  const handleDecryptSubmit = (data: FileData) => {
+  const handleDecryptSubmit = async (data: FileData) => {
     setDecryptFileData(data);
     setProcessingText({
       title: "Decrypting Your File",
       message: "Please wait while we securely decrypt your file..."
     });
     setActivePanel("processing");
+    
+    try {
+      // For files from decryption links, we need to get the file from the server first
+      if (params.id) {
+        // This is already handled in the DecryptPanel component
+      }
+      
+      // Client-side decryption
+      const { decryptedData, originalFileName } = 
+        await decryptFile(data.file, data.password);
+      
+      // Create download link
+      const { url, fileName } = createDownloadLink(decryptedData, originalFileName);
+      
+      // Success - show decryption result
+      handleDecryptSuccess({
+        fileName: originalFileName,
+        fileSize: decryptedData.byteLength,
+        downloadUrl: url
+      });
+    } catch (error) {
+      console.error('Decryption error:', error);
+      handleError({
+        title: "Decryption Failed",
+        message: "We couldn't decrypt your file. Please check your password and make sure you're using the correct file.",
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
   };
 
   const handleEncryptNewFile = () => {

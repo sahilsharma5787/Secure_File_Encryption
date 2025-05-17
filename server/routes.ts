@@ -32,6 +32,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Ensure uploads directory exists
   await ensureUploadsDir();
 
+  // Add a health check endpoint
+  app.get('/api/health', (req, res) => {
+    res.status(200).json({ status: 'ok', message: 'Service is running' });
+  });
+
   // API endpoints
   app.post('/api/encrypt', upload.single('file'), async (req, res) => {
     try {
@@ -43,6 +48,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fileId = nanoid(10);
       const originalFileName = req.file.originalname;
       const fileSize = req.file.size;
+      
+      // Make sure uploads directory exists
+      await ensureUploadsDir();
       
       // Store the file temporarily
       const filePath = path.join(UPLOADS_DIR, `${fileId}.encrypted`);
@@ -64,12 +72,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const protocol = req.headers['x-forwarded-proto'] || 'http';
       
       // For Replit domains, use environment variable if available
-      const domain = process.env.REPLIT_DOMAINS ? 
-        process.env.REPLIT_DOMAINS.split(',')[0] : 
-        `${protocol}://${host}`;
+      let domain;
+      if (process.env.REPLIT_DOMAINS) {
+        domain = `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`;
+      } else {
+        domain = `${protocol}://${host}`;
+      }
       
       const downloadUrl = `/api/files/${fileId}/download`;
       const decryptLink = `${domain}/decrypt/${fileId}`;
+
+      console.log(`Created encrypted file: ${filePath}`);
+      console.log(`Download URL: ${downloadUrl}`);
+      console.log(`Decrypt link: ${decryptLink}`);
 
       res.status(201).json({
         id: fileId,
@@ -127,6 +142,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         await fs.access(file.encryptedFilePath);
       } catch (error) {
+        console.error(`File not found at path: ${file.encryptedFilePath}`, error);
         return res.status(404).json({ message: 'File data not found' });
       }
 
@@ -158,15 +174,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Verify file looks like an encrypted file
       const buffer = req.file.buffer;
       if (buffer.length < 32) { // Minimum size for header
-        return res.status(400).json({ message: 'Invalid encrypted file format' });
+        return res.status(400).json({ message: 'Invalid encrypted file format - file too small' });
       }
 
       // Generate a temporary ID for the decrypted file response
       const fileId = nanoid(10);
+      
+      // Make sure uploads directory exists
+      await ensureUploadsDir();
+      
       const filePath = path.join(UPLOADS_DIR, `${fileId}.decrypting`);
       
       // Store the file temporarily for verification/processing
       await fs.writeFile(filePath, buffer);
+      console.log(`Stored file for decryption at: ${filePath}`);
 
       // Extract metadata like original filename if present
       // This would be a basic validation check
@@ -184,6 +205,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           throw new Error('Invalid filename length in encrypted file');
         }
 
+        console.log(`Validated file for decryption, ID: ${fileId}, filename length: ${fileNameLength}`);
+        
         // Return placeholder response since actual decryption happens client-side
         res.status(200).json({
           success: true,
@@ -193,8 +216,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       } catch (error) {
         console.error('Error verifying encrypted file:', error);
+        // Delete the invalid file
+        try {
+          await fs.unlink(filePath);
+        } catch (unlinkError) {
+          console.error('Error deleting invalid file:', unlinkError);
+        }
+        
         res.status(400).json({ 
-          message: 'Invalid encrypted file format',
+          message: 'Invalid encrypted file format. Make sure you are uploading a correctly encrypted file.',
           error: error instanceof Error ? error.message : String(error)
         });
       }
@@ -212,10 +242,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const filePath = path.join(UPLOADS_DIR, `${id}.decrypting`);
       
+      console.log(`Attempting to download temporary file: ${filePath}`);
+      
       // Check if file exists
       try {
         await fs.access(filePath);
       } catch (error) {
+        console.error(`Temporary file not found at path: ${filePath}`, error);
         return res.status(404).json({ message: 'Temporary file not found' });
       }
 
@@ -225,11 +258,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Stream the file to the response
       const fileBuffer = await fs.readFile(filePath);
+      
+      if (!fileBuffer || fileBuffer.length === 0) {
+        return res.status(404).json({ message: 'Empty temporary file' });
+      }
+      
+      console.log(`Sending temporary file (${fileBuffer.length} bytes) to client`);
       res.send(fileBuffer);
       
-      // Delete the temp file after sending
+      // Only delete the temp file after successful sending
       try {
+        // In a production app, we might want to keep files for a short time
+        // for debugging purposes or retries, but we'll delete here
         await fs.unlink(filePath);
+        console.log(`Deleted temporary file: ${filePath}`);
       } catch (error) {
         console.error('Error deleting temporary file:', error);
       }
